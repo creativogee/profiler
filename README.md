@@ -1,16 +1,6 @@
 # @crudmates/profiler
 
-A comprehensive performance profiling utility for Node.js applications that provides timing, memory monitoring, and garbage collection tracking capabilities. This package offers multiple tools to help you understand and optimize your application's performance.
-
-## Features
-
-- ⚡ **Performance Profiling**: Measure execution time of functions and code blocks
-- 📊 **Memory Monitoring**: Track memory usage and detect potential memory leaks
-- 🗑️ **Garbage Collection**: Monitor and trigger GC when needed
-- 🎯 **Checkpoints**: Create detailed performance marks and measure intervals
-- 📝 **Flexible Logging**: Configurable logging levels and output formats
-- 🔄 **Async Support**: Full support for async/await operations
-- 🎨 **TypeScript**: Written in TypeScript with full type definitions
+A comprehensive Node.js profiler that combines function-level timing, V8 performance analysis, and memory monitoring in a production-safe package. Designed for both development debugging and continuous production monitoring.
 
 ## Installation
 
@@ -18,226 +8,295 @@ A comprehensive performance profiling utility for Node.js applications that prov
 npm install @crudmates/profiler
 ```
 
-## Quick Start
+## The Complete Toolkit
 
-```typescript
-import { profile, Timer, MemMonitor, Profiler } from '@crudmates/profiler';
+### ⚡ Function Profiling - For Individual Operations
 
-// Basic function profiling
-const { result, profile: stats } = await profile(async () => await fetchData(), 'fetchData', {
-  trackMemory: true,
-});
-
-// Quick timing
-const timer = new Timer('operation');
-// ... do work ...
-timer.stop();
-```
-
-## Usage Guide
-
-### 1. Function Profiling
-
-The `profile` function is the simplest way to measure performance of a specific function or code block.
+Perfect for profiling API endpoints, database queries, or any specific function:
 
 ```typescript
 import { profile } from '@crudmates/profiler';
 
-// Basic usage
-const { result, profile: stats } = await profile(() => expensiveOperation(), 'expensiveOperation');
+// Profile any function with timing + memory
+const { result, profile: stats } = await profile(
+  () => expensiveOperation(),
+  'expensiveOperation',
+  {
+    trackMemory: true,
+    enableGC: true,
+    tags: { operation: 'database' }
+  }
+);
 
-// With configuration
-const { result, profile: stats } = await profile(() => databaseQuery(), 'databaseQuery', {
-  trackMemory: true, // Enable memory tracking
-  enableGC: true, // Enable garbage collection
-  gcThresholdMB: 100, // Trigger GC when heap usage exceeds 100MB
-  tags: {
-    // Add custom tags
-    operation: 'database',
-    type: 'query',
-  },
-  logLevel: 'debug', // Set log level
-  verbose: true, // Enable detailed logging
-  silent: false, // Enable logging
-});
-
-// The profile result contains:
-console.log(stats);
-// {
-//   name: 'databaseQuery',
-//   duration: 123.45,        // in milliseconds
-//   memBefore: {...},        // memory usage before execution
-//   memAfter: {...},         // memory usage after execution
-//   memDelta: {...},         // memory usage difference
-//   gcTriggered: false,      // whether GC was triggered
-//   tags: {...},             // custom tags
-//   result: {...},           // function result
-//   error: undefined         // error if thrown
-// }
+console.log(`${stats.name} took ${stats.duration}ms`);
+console.log(`Memory delta: ${stats.memDelta?.heapUsed}MB`);
 ```
 
-### 2. Method Decorator
+### 🔬 V8 Profiler - For Application-Level Analysis  
 
-For class methods, you can use the `@Profile` decorator:
+**NEW!** Deep performance analysis for production applications:
+
+```typescript
+import { V8Profiler } from '@crudmates/profiler';
+
+// Start continuous profiling with automatic 60-min intervals
+const v8Profiler = new V8Profiler('production-api', {
+  maxMemoryBudgetMB: 100,        // Hard memory limit
+  intervalMinutes: 60,           // Auto-log every hour  
+  cpuProfiling: true,           // Find performance bottlenecks
+  samplingHeapProfiler: true,   // Track memory allocations
+});
+
+await v8Profiler.startContinuousProfiling();
+// Runs indefinitely, logs insights every 60 minutes
+// Zero memory buildup, actionable insights only
+
+// Later...
+const insights = await v8Profiler.stopContinuousProfiling();
+console.log('Top CPU consumers:', insights.topFunctions);
+console.log('Memory hot spots:', insights.memoryHotspots);
+```
+
+### 📊 Method Decorator - For Class Methods
+
+Zero-friction profiling with decorators:
 
 ```typescript
 import { Profile } from '@crudmates/profiler';
 
 class UserService {
-  @Profile('fetchUsers', {
-    trackMemory: true,
-    enableGC: true,
-    tags: { operation: 'database-query' },
-  })
+  @Profile('fetchUsers', { trackMemory: true })
   async fetchUsers() {
-    // Method implementation
     return await this.userRepository.find();
   }
 }
 ```
 
-### 3. Simple Timer
+### ⏱️ Timer - For Quick Measurements
 
-The `Timer` class provides a lightweight way to measure execution time:
+Lightweight timing without overhead:
 
 ```typescript
 import { Timer } from '@crudmates/profiler';
 
-// Basic usage
-const timer = new Timer('operation-name');
-// ... do work ...
-const duration = timer.stop();
+const timer = new Timer('database-query');
+const users = await db.users.find();
+timer.stop({ userCount: users.length });
 
-// With additional data
-timer.stop({ recordCount: 1000 });
-
-// Static method
-const result = await Timer.time(async () => await processData(), 'processData');
+// Or static method
+const result = await Timer.time(() => processData(), 'processData');
 ```
 
-### 4. Memory Monitoring
+### 🧠 Memory Monitor - For Memory Analysis
 
-The `MemMonitor` class helps track memory usage over time:
+Track memory usage patterns over time:
 
 ```typescript
 import { MemMonitor } from '@crudmates/profiler';
 
 const monitor = new MemMonitor();
-
-// Take snapshots
 monitor.snap('start');
 await processLargeDataset();
-monitor.snap('processing-complete');
-await cleanupOperation();
-monitor.snap('cleanup-complete');
-
-// Compare specific points
-monitor.compare('start', 'processing-complete');
-
-// Get all snapshots
-const snapshots = monitor.getSnaps();
-
-// Clear snapshots
-monitor.clear();
+monitor.snap('after-processing');
+monitor.compare('start', 'after-processing');
 ```
 
-### 5. Advanced Profiling
+### 🎯 Advanced Profiler - For Complex Workflows
 
-The `Profiler` class provides comprehensive profiling for complex operations:
+Multi-step profiling with checkpoints:
 
 ```typescript
 import { Profiler } from '@crudmates/profiler';
 
 const profiler = new Profiler('batch-processing', {
   enableGC: true,
-  gcThresholdMB: 100,
-  logSteps: true,
+  gcThresholdMB: 100
 });
 
-// Start profiling
 profiler.start();
-
-// Add marks during processing
 for (const batch of batches) {
   profiler.mark(`processing-batch-${batch.id}`);
   await processBatch(batch);
 }
-
-// Get current summary without ending
-const currentStatus = profiler.getSummary();
-
-// Get detailed step breakdown
-const steps = profiler.getSteps();
-
-// End profiling and get full report
 const summary = profiler.end();
-// Summary includes:
-// - Total duration
-// - GC count
-// - Detailed marks with timestamps
-// - Memory deltas between marks
-// - Step-by-step breakdown
 ```
 
-### 6. Memory Leak Detection
+## V8Profiler: Production-Grade Performance Analysis
 
-The utility includes a helper function to detect potential memory leaks:
+The **V8Profiler** sets this package apart from basic timing libraries. It provides the deep insights of clinic.js or 0x, but designed for **continuous production monitoring**:
+
+### 🎛️ Smart Configuration
+
+```typescript
+const profiler = new V8Profiler('my-app', {
+  maxMemoryBudgetMB: 50,         // Required: Hard memory limit
+  intervalMinutes: 120,          // Custom interval (2 hours)
+  cpuProfiling: true,           // CPU bottleneck analysis  
+  samplingHeapProfiler: true,   // Memory allocation tracking
+  suppressWarnings: false       // Get configuration guidance
+});
+```
+
+### 📈 Actionable Insights (Not Raw Data)
+
+Unlike tools that dump massive profile files, we return **structured insights**:
+
+```typescript
+const insights = await profiler.flushCurrentInterval();
+
+// CPU Performance
+insights.topFunctions.forEach(fn => {
+  console.log(`${fn.functionName}: ${fn.selfTime}ms (${fn.percentage}%)`);
+});
+
+// Memory Analysis  
+insights.memoryHotspots.forEach(spot => {
+  console.log(`${spot.allocation}: ${spot.size} bytes (${spot.count} allocations)`);
+});
+
+// Current memory state
+console.log(`Heap: ${insights.memoryUsage.heap}`);
+console.log(`RSS: ${insights.memoryUsage.rss}`);
+```
+
+### 🔒 Memory Safety First
+
+The **maxMemoryBudgetMB** requirement prevents profiling from becoming the problem:
+
+```typescript
+// ✅ Safe - enforces memory limits
+const profiler = new V8Profiler('app', {
+  maxMemoryBudgetMB: 100,  // Required parameter
+  intervalMinutes: 240     // 4 hours
+});
+
+// ⚠️ Gets helpful warnings:
+// "High memory risk: 240min interval may use ~360MB, approaching limit of 100MB"
+// "Consider: reducing intervalMinutes to 53 or increasing maxMemoryBudgetMB to 432"
+```
+
+## Memory Leak Detection
+
+Built-in leak detection for proactive monitoring:
 
 ```typescript
 import { detectMemLeak } from '@crudmates/profiler';
 
-// Collect memory measurements
-const measurements: NodeJS.MemoryUsage[] = [];
+const measurements = [];
 for (let i = 0; i < 10; i++) {
   measurements.push(process.memoryUsage());
   await someOperation();
 }
 
-// Analyze measurements
 const analysis = detectMemLeak(measurements, 50); // 50MB threshold
-console.log(analysis);
-// {
-//   isLeaking: boolean,
-//   trend: 'increasing' | 'decreasing' | 'stable',
-//   avgGrowth: number // Average growth in MB
-// }
+if (analysis.isLeaking) {
+  console.warn(`Memory leak detected! Trend: ${analysis.trend}, Growth: ${analysis.avgGrowth}MB`);
+}
 ```
 
-## Configuration Options
+## How Does This Compare to Other Profilers?
 
-### Profile Config
+| Feature | `@crudmates/profiler` | `clinic.js` | `0x` | `--prof` | `perf_hooks` |
+|---------|:---------------------:|:-----------:|:----:|:--------:|:------------:|
+| Function-level timing | ✅ | ❌ | ❌ | ❌ | ⚠️ Manual |
+| V8 CPU profiling | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Memory allocation tracking | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Zero disk writes | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Production-safe intervals | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Memory budget protection | ✅ | ❌ | ❌ | ❌ | ❌ |
+| TypeScript native | ✅ | ⚠️ | ⚠️ | ❌ | ⚠️ |
+| Async/await support | ✅ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
+| Single dependency | ✅ | ❌ | ❌ | ✅ | ✅ |
 
-| Option          | Type                          | Default | Description                          |
-| --------------- | ----------------------------- | ------- | ------------------------------------ |
-| `trackMemory`   | boolean                       | true    | Enable memory usage tracking         |
-| `enableGC`      | boolean                       | false   | Enable garbage collection monitoring |
-| `gcThresholdMB` | number                        | 100     | Memory threshold to trigger GC       |
-| `logger`        | Logger \| Console             | console | Logger instance to use               |
-| `tags`          | Record<string, unknown>       | {}      | Custom tags for logging              |
-| `logLevel`      | 'debug' \| 'log' \| 'verbose' | 'debug' | Log level for output                 |
-| `logSteps`      | boolean                       | true    | Log individual checkpoints           |
-| `verbose`       | boolean                       | false   | Enable detailed intermediate steps   |
-| `silent`        | boolean                       | false   | Disable all logging                  |
+## Why Choose This Profiler?
+
+### 🚀 **Complete Profiling Spectrum**
+Most profilers focus on either basic timing or complex V8 analysis. This package provides both:
+
+- **Function-level profiling** (microseconds) - For API endpoints, database queries
+- **Application-level V8 profiling** (minutes/hours) - Deep CPU and memory analysis
+- **Memory monitoring** with leak detection - Real-time tracking without overhead
+- **Checkpoint system** for complex workflows - Mark and measure any process step-by-step
+
+### 🛡️ **Production-Safe by Design**
+Many profilers can impact performance or consume excessive resources:
+
+- **Zero disk I/O** - Everything stays in memory with configurable budgets
+- **Memory budget enforcement** - Hard limits prevent profiling from causing issues
+- **Automatic interval flushing** - Long-running profiling without memory buildup
+- **Smart configuration warnings** - Helps avoid problematic settings
+
+### 🎯 **Built for Real Applications**
+Features that matter for production use:
+
+- **Async/await native** - No callback hell or promise wrapping
+- **TypeScript first** - Full type safety and IntelliSense
+- **Production logging integration** - Works with your existing logger
+- **Configurable everything** - From silent mode to verbose debugging
+
+**Key insight:** While other tools excel in specific areas, this profiler bridges the gap between development debugging and production monitoring, with built-in safety features to prevent profiling from impacting your application's performance.
+
+## Configuration Reference
+
+### ProfileConfig (function profiling)
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `trackMemory` | boolean | true | Enable memory usage tracking |
+| `enableGC` | boolean | false | Enable garbage collection monitoring |
+| `gcThresholdMB` | number | 100 | Memory threshold to trigger GC |
+| `logger` | Logger \| Console | console | Custom logger instance |
+| `tags` | Record<string, unknown> | {} | Custom tags for categorization |
+| `logLevel` | 'debug' \| 'log' \| 'verbose' | 'debug' | Logging verbosity |
+| `verbose` | boolean | false | Detailed step-by-step logging |
+| `silent` | boolean | false | Disable all logging output |
+
+### V8Options (V8 profiling)
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `maxMemoryBudgetMB` | number | **Required** | Hard memory limit for profiling data |
+| `intervalMinutes` | number | 60 | Auto-flush interval (prevents buildup) |
+| `cpuProfiling` | boolean | true | Enable CPU performance analysis |
+| `samplingHeapProfiler` | boolean | true | Enable memory allocation tracking |
+| `streamingMode` | boolean | true | Process data incrementally |
+| `suppressWarnings` | boolean | false | Hide configuration warnings |
+| `logger` | Logger \| Console | console | Custom logger instance |
 
 ## Best Practices
 
-1. **Memory Tracking**: Enable `trackMemory` when profiling memory-intensive operations
-2. **Garbage Collection**:
-   - Always run Node.js with `--expose-gc` when using GC features
-   - Use `enableGC` carefully as it can impact performance
-   - Consider higher `gcThresholdMB` values in production
-3. **Logging**:
-   - Use `verbose: true` when you need detailed step-by-step information
-   - Use `logLevel: 'verbose'` for most detailed logging output
-   - Consider disabling verbose mode in production for better performance
-4. **Marks**: Add meaningful marks in long-running operations for better analysis
-5. **Custom Tags**: Add relevant tags to help categorize and filter profiling data
+### 🎯 Function Profiling
+- Use for individual operations (< 1 minute duration)
+- Enable `trackMemory` for memory-intensive operations
+- Add meaningful `tags` for categorization
+
+### 🔬 V8 Profiling  
+- Use for application-level analysis (> 1 minute duration)
+- Start with 60-minute intervals in production
+- Set `maxMemoryBudgetMB` based on available system memory
+- Use `suppressWarnings: true` once configuration is stable
+
+### 💾 Memory Management
+- Always run with `--expose-gc` when using GC features
+- Monitor memory trends with `detectMemLeak()`
+- Use higher `gcThresholdMB` values in production
+
+### 📝 Logging
+- Use `verbose: true` for debugging, `silent: true` for production
+- Integrate with your application's logger instance
+- Add contextual tags for better filtering
 
 ## Requirements
 
-- Node.js >= 14.0.0
-- TypeScript >= 5.0.0 (for TypeScript users)
+- **Node.js** >= 14.0.0
+- **TypeScript** >= 5.0.0 (for TypeScript users)
+- Run with `--expose-gc` for garbage collection features
+- Run with `--inspect` for V8 profiling features (development)
 
-## 📄 License
+## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) file for details.
+
+---
+
+**Ready to optimize your Node.js applications?** Install `@crudmates/profiler` and start profiling with confidence! 🚀

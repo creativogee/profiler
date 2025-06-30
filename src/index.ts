@@ -810,3 +810,505 @@ export function detectMemLeak(
     avgGrowth: avgGrowthMB,
   };
 }
+
+/**
+ * V8 profiling options configuration
+ */
+export interface V8Options {
+  /** Required memory budget in MB for V8 profiling data */
+  maxMemoryBudgetMB: number;
+  /** Interval in minutes for automatic logging and data clearing (default: 60) */
+  intervalMinutes?: number;
+  /** Process V8 data incrementally vs accumulating (default: true) */
+  streamingMode?: boolean;
+  /** Enable CPU profiling for performance bottleneck analysis (default: true) */
+  cpuProfiling?: boolean;
+  /** Enable sampling heap profiler for memory allocation tracking (default: true) */
+  samplingHeapProfiler?: boolean;
+  /** Logger instance to use (defaults to console) */
+  logger?: Logger | Console;
+  /** Suppress configuration warnings (default: false) */
+  suppressWarnings?: boolean;
+}
+
+/**
+ * V8 profiling insights result
+ */
+export interface V8Insights {
+  /** Duration of the profiling session */
+  duration: number;
+  /** Top CPU-consuming functions */
+  topFunctions: Array<{
+    functionName: string;
+    selfTime: number;
+    totalTime: number;
+    percentage: number;
+  }>;
+  /** Memory allocation hot spots */
+  memoryHotspots: Array<{
+    allocation: string;
+    size: number;
+    count: number;
+  }>;
+  /** Garbage collection impact metrics */
+  gcImpact: {
+    gcTime: number;
+    gcCount: number;
+    avgGcDuration: number;
+  };
+  /** Memory usage at interval end */
+  memoryUsage: {
+    heap: string;
+    rss: string;
+    external: string;
+  };
+}
+
+/**
+ * Advanced V8 profiler for long-running application analysis
+ * Provides CPU profiling and memory allocation tracking with automatic
+ * interval-based logging to prevent memory buildup
+ *
+ * @example
+ * ```typescript
+ * // Start continuous profiling with 60-minute intervals
+ * const v8Profiler = new V8Profiler('production-app', {
+ *   maxMemoryBudgetMB: 100,
+ *   intervalMinutes: 60,
+ *   cpuProfiling: true,
+ *   samplingHeapProfiler: true
+ * });
+ *
+ * await v8Profiler.startContinuousProfiling();
+ * // Runs indefinitely, auto-logs insights every 60 minutes
+ *
+ * // Later, stop profiling
+ * await v8Profiler.stopContinuousProfiling();
+ * ```
+ */
+export class V8Profiler {
+  private options: Required<V8Options>;
+  private session: any; // inspector.Session
+  private intervalTimer?: NodeJS.Timeout;
+  private currentMemoryUsage = 0;
+  private profilingStartTime = 0;
+  private isRunning = false;
+
+  constructor(_name: string, options: V8Options) {
+    this.options = {
+      intervalMinutes: 60,
+      streamingMode: true,
+      cpuProfiling: true,
+      samplingHeapProfiler: true,
+      logger: console,
+      suppressWarnings: false,
+      ...options,
+    };
+
+    this.validateConfiguration();
+    this.initializeInspector();
+  }
+
+  /**
+   * Initialize V8 Inspector session
+   */
+  private initializeInspector(): void {
+    try {
+      // Dynamic import to handle environments where inspector might not be available
+      const inspector = require('inspector');
+      this.session = new inspector.Session();
+      this.session.connect();
+    } catch (error) {
+      throw new Error('V8 Inspector not available. Run with --inspect flag or in supported environment.');
+    }
+  }
+
+  /**
+   * Validate configuration and show warnings if needed
+   */
+  private validateConfiguration(): void {
+    const { maxMemoryBudgetMB, intervalMinutes } = this.options;
+
+    // Estimate memory usage per minute (rough heuristics)
+    const estimatedMBPerMinute = this.calculateEstimatedUsage();
+    const projectedUsage = estimatedMBPerMinute * intervalMinutes;
+
+    // Warning thresholds
+    if (projectedUsage > maxMemoryBudgetMB * 0.8) {
+      this.warn(
+        `High memory risk: ${intervalMinutes}min interval may use ~${projectedUsage.toFixed(1)}MB, ` +
+        `approaching limit of ${maxMemoryBudgetMB}MB`
+      );
+      this.warn(
+        `Consider: reducing intervalMinutes to ${Math.floor(maxMemoryBudgetMB * 0.8 / estimatedMBPerMinute)} ` +
+        `or increasing maxMemoryBudgetMB to ${Math.ceil(projectedUsage * 1.2)}`
+      );
+    }
+
+    if (intervalMinutes > 240) { // 4+ hours
+      this.warn(
+        `Very long interval (${intervalMinutes}min) may accumulate significant data. ` +
+        `Consider shorter intervals for better memory management.`
+      );
+    }
+
+    if (maxMemoryBudgetMB < 50) {
+      this.warn(
+        `Low memory budget (${maxMemoryBudgetMB}MB) may cause frequent early flushes. ` +
+        `Consider increasing budget or reducing interval.`
+      );
+    }
+  }
+
+  /**
+   * Calculate estimated memory usage per minute
+   */
+  private calculateEstimatedUsage(): number {
+    let mbPerMinute = 0;
+
+    if (this.options.cpuProfiling) {
+      mbPerMinute += 0.5; // ~0.5MB per minute for CPU profiling
+    }
+
+    if (this.options.samplingHeapProfiler) {
+      mbPerMinute += 1.0; // ~1MB per minute for heap sampling
+    }
+
+    return mbPerMinute;
+  }
+
+  /**
+   * Log warning message if warnings are not suppressed
+   */
+  private warn(message: string): void {
+    if (!this.options.suppressWarnings) {
+      const logger = this.options.logger;
+      if (typeof (logger as Logger).warn === 'function') {
+        (logger as Logger).warn!(`V8Profiler Warning: ${message}`);
+      } else {
+        (logger as Console).warn(`V8Profiler Warning: ${message}`);
+      }
+    }
+  }
+
+  /**
+   * Log info message
+   */
+  private log(message: string, data?: Record<string, unknown>): void {
+    const logger = this.options.logger;
+    if (typeof (logger as Logger).debug === 'function') {
+      (logger as Logger).debug!({ message: `V8Profiler: ${message}`, ...data });
+    } else {
+      (logger as Console).log({ message: `V8Profiler: ${message}`, ...data });
+    }
+  }
+
+  /**
+   * Start continuous V8 profiling with automatic interval logging
+   */
+  async startContinuousProfiling(): Promise<void> {
+    if (this.isRunning) {
+      throw new Error('V8 profiling is already running');
+    }
+
+    try {
+      await this.startProfilingSession();
+      this.setupIntervalTimer();
+      this.isRunning = true;
+      
+      this.log(`Started continuous profiling with ${this.options.intervalMinutes}min intervals`);
+    } catch (error) {
+      throw new Error(`Failed to start V8 profiling: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Stop continuous V8 profiling
+   */
+  async stopContinuousProfiling(): Promise<V8Insights> {
+    if (!this.isRunning) {
+      throw new Error('V8 profiling is not running');
+    }
+
+    // Clear interval timer
+    if (this.intervalTimer) {
+      clearInterval(this.intervalTimer);
+      this.intervalTimer = undefined;
+    }
+
+    // Get final insights before stopping
+    const insights = await this.flushCurrentInterval();
+    
+    // Stop profiling sessions
+    await this.stopProfilingSession();
+    this.isRunning = false;
+
+    this.log('Stopped continuous profiling');
+    return insights;
+  }
+
+  /**
+   * Manually flush current interval (useful for testing)
+   */
+  async flushCurrentInterval(): Promise<V8Insights> {
+    if (!this.isRunning) {
+      throw new Error('V8 profiling is not running');
+    }
+
+    const insights = await this.collectInsights();
+    await this.resetProfilingSession();
+    
+    this.log('Flushed profiling interval', {
+      duration: `${insights.duration.toFixed(2)}ms`,
+      topFunctions: insights.topFunctions.length,
+      memoryHotSpots: insights.memoryHotspots.length,
+    });
+
+    return insights;
+  }
+
+  /**
+   * Check if memory budget is exceeded
+   */
+  isMemoryBudgetExceeded(): boolean {
+    return this.currentMemoryUsage > this.options.maxMemoryBudgetMB;
+  }
+
+  /**
+   * Get current memory usage by V8 profiler
+   */
+  getCurrentMemoryUsage(): number {
+    return this.currentMemoryUsage;
+  }
+
+  /**
+   * Start V8 profiling session
+   */
+  private async startProfilingSession(): Promise<void> {
+    this.profilingStartTime = performance.now();
+    this.currentMemoryUsage = 0;
+
+    const promises = [];
+
+    if (this.options.cpuProfiling) {
+      promises.push(this.session.post('Profiler.enable'));
+      promises.push(this.session.post('Profiler.start'));
+    }
+
+    if (this.options.samplingHeapProfiler) {
+      promises.push(this.session.post('HeapProfiler.enable'));
+      promises.push(this.session.post('HeapProfiler.startSampling', { samplingInterval: 32768 }));
+    }
+
+    await Promise.all(promises);
+  }
+
+  /**
+   * Stop V8 profiling session
+   */
+  private async stopProfilingSession(): Promise<void> {
+    const promises = [];
+
+    if (this.options.cpuProfiling) {
+      promises.push(this.session.post('Profiler.stop'));
+      promises.push(this.session.post('Profiler.disable'));
+    }
+
+    if (this.options.samplingHeapProfiler) {
+      promises.push(this.session.post('HeapProfiler.stopSampling'));
+      promises.push(this.session.post('HeapProfiler.disable'));
+    }
+
+    await Promise.all(promises);
+  }
+
+  /**
+   * Reset profiling session (for interval flushing)
+   */
+  private async resetProfilingSession(): Promise<void> {
+    await this.stopProfilingSession();
+    await this.startProfilingSession();
+  }
+
+  /**
+   * Setup interval timer for automatic flushing
+   */
+  private setupIntervalTimer(): void {
+    const intervalMs = this.options.intervalMinutes * 60 * 1000;
+    
+    this.intervalTimer = setInterval(async () => {
+      try {
+        await this.flushCurrentInterval();
+      } catch (error) {
+        this.log('Error during interval flush', { 
+          error: error instanceof Error ? error.message : String(error) 
+        });
+      }
+    }, intervalMs);
+  }
+
+  /**
+   * Collect and process V8 insights
+   */
+  private async collectInsights(): Promise<V8Insights> {
+    const endTime = performance.now();
+    const duration = endTime - this.profilingStartTime;
+    
+    const insights: V8Insights = {
+      duration,
+      topFunctions: [],
+      memoryHotspots: [],
+      gcImpact: {
+        gcTime: 0,
+        gcCount: 0,
+        avgGcDuration: 0,
+      },
+      memoryUsage: {
+        heap: '',
+        rss: '',
+        external: '',
+      },
+    };
+
+    const promises = [];
+
+    // Collect CPU profile data
+    if (this.options.cpuProfiling) {
+      promises.push(this.collectCPUProfile(insights));
+    }
+
+    // Collect heap allocation data
+    if (this.options.samplingHeapProfiler) {
+      promises.push(this.collectHeapProfile(insights));
+    }
+
+    // Collect current memory usage
+    promises.push(this.collectMemoryUsage(insights));
+
+    await Promise.all(promises);
+
+    return insights;
+  }
+
+  /**
+   * Collect CPU profiling insights
+   */
+  private async collectCPUProfile(insights: V8Insights): Promise<void> {
+    try {
+      const { profile } = await this.session.post('Profiler.stop');
+      await this.session.post('Profiler.start'); // Restart for continuous profiling
+
+      if (profile && profile.nodes) {
+        const functionTimes = new Map<string, { selfTime: number; totalTime: number }>();
+        
+        // Process profile nodes to extract function timing data
+        profile.nodes.forEach((node: any) => {
+          if (node.callFrame && node.callFrame.functionName) {
+            const funcName = node.callFrame.functionName || 'anonymous';
+            const selfTime = node.hitCount ? node.hitCount * profile.timeInterval : 0;
+            
+            if (functionTimes.has(funcName)) {
+              const existing = functionTimes.get(funcName)!;
+              existing.selfTime += selfTime;
+              existing.totalTime += selfTime;
+            } else {
+              functionTimes.set(funcName, { selfTime, totalTime: selfTime });
+            }
+          }
+        });
+
+        // Sort by self time and get top functions
+        const sortedFunctions = Array.from(functionTimes.entries())
+          .map(([name, times]) => ({
+            functionName: name,
+            selfTime: times.selfTime / 1000, // Convert to ms
+            totalTime: times.totalTime / 1000,
+            percentage: (times.selfTime / insights.duration) * 100,
+          }))
+          .sort((a, b) => b.selfTime - a.selfTime)
+          .slice(0, 10);
+
+        insights.topFunctions = sortedFunctions;
+        
+        // Update memory usage estimate
+        this.currentMemoryUsage += this.estimateProfileSize(profile);
+      }
+    } catch (error) {
+      this.log('Error collecting CPU profile', { 
+        error: error instanceof Error ? error.message : String(error) 
+      });
+    }
+  }
+
+  /**
+   * Collect heap profiling insights
+   */
+  private async collectHeapProfile(insights: V8Insights): Promise<void> {
+    try {
+      const { profile } = await this.session.post('HeapProfiler.stopSampling');
+      await this.session.post('HeapProfiler.startSampling', { samplingInterval: 32768 });
+
+      if (profile && profile.samples) {
+        const allocationMap = new Map<string, { size: number; count: number }>();
+
+        profile.samples.forEach((sample: any) => {
+          if (sample.stack && sample.stack.length > 0) {
+            const topFrame = sample.stack[0];
+            const location = `${topFrame.functionName || 'anonymous'} at ${topFrame.scriptName || 'unknown'}:${topFrame.lineNumber || 0}`;
+            
+            if (allocationMap.has(location)) {
+              const existing = allocationMap.get(location)!;
+              existing.size += sample.size || 0;
+              existing.count += 1;
+            } else {
+              allocationMap.set(location, { size: sample.size || 0, count: 1 });
+            }
+          }
+        });
+
+        // Sort by size and get top allocations
+        const sortedAllocations = Array.from(allocationMap.entries())
+          .map(([location, data]) => ({
+            allocation: location,
+            size: data.size,
+            count: data.count,
+          }))
+          .sort((a, b) => b.size - a.size)
+          .slice(0, 10);
+
+        insights.memoryHotspots = sortedAllocations;
+        
+        // Update memory usage estimate
+        this.currentMemoryUsage += this.estimateProfileSize(profile);
+      }
+    } catch (error) {
+      this.log('Error collecting heap profile', { 
+        error: error instanceof Error ? error.message : String(error) 
+      });
+    }
+  }
+
+  /**
+   * Collect current memory usage
+   */
+  private async collectMemoryUsage(insights: V8Insights): Promise<void> {
+    const memUsage = process.memoryUsage();
+    insights.memoryUsage = {
+      heap: formatMemMB(memUsage.heapUsed),
+      rss: formatMemMB(memUsage.rss),
+      external: formatMemMB(memUsage.external),
+    };
+  }
+
+  /**
+   * Estimate memory size of profile data
+   */
+  private estimateProfileSize(profile: any): number {
+    try {
+      const jsonString = JSON.stringify(profile);
+      return (jsonString.length * 2) / 1024 / 1024; // Rough estimate in MB
+    } catch {
+      return 1; // Default estimate if JSON.stringify fails
+    }
+  }
+}

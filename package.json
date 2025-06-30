@@ -1,6 +1,6 @@
 {
   "name": "@crudmates/profiler",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A comprehensive performance profiling utility for Node.js applications with timing, memory monitoring, and garbage collection tracking. Perfect for debugging performance issues, memory leaks, and optimizing application performance.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
